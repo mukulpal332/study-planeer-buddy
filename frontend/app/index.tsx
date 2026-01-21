@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,8 @@ import {
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { format, parseISO, isToday } from 'date-fns';
+import { format, parseISO, isToday, isSameDay } from 'date-fns';
+import { Calendar, DateData } from 'react-native-calendars';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
 
@@ -23,6 +24,7 @@ interface Revision {
   notes: string;
   day_number: number;
   revision_date: string;
+  completed?: boolean;
   created_at?: string;
 }
 
@@ -30,25 +32,42 @@ export default function HomeScreen() {
   const router = useRouter();
   const [todayRevisions, setTodayRevisions] = useState<Revision[]>([]);
   const [upcomingRevisions, setUpcomingRevisions] = useState<Revision[]>([]);
+  const [allRevisions, setAllRevisions] = useState<Revision[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+  const [selectedDateRevisions, setSelectedDateRevisions] = useState<Revision[]>([]);
 
   const fetchRevisions = async () => {
     try {
-      const [todayRes, upcomingRes] = await Promise.all([
+      const [todayRes, upcomingRes, allRes] = await Promise.all([
         fetch(`${API_URL}/api/revisions/today`),
         fetch(`${API_URL}/api/revisions/upcoming`),
+        fetch(`${API_URL}/api/revisions/all`),
       ]);
 
+      let todayData: Revision[] = [];
+      let upcomingData: Revision[] = [];
+      let allData: Revision[] = [];
+
       if (todayRes.ok) {
-        const todayData = await todayRes.json();
+        todayData = await todayRes.json();
         setTodayRevisions(todayData);
       }
 
       if (upcomingRes.ok) {
-        const upcomingData = await upcomingRes.json();
+        upcomingData = await upcomingRes.json();
         setUpcomingRevisions(upcomingData);
       }
+
+      if (allRes.ok) {
+        allData = await allRes.json();
+        setAllRevisions(allData);
+      }
+      
+      // Set selected date revisions for today by default
+      const todayStr = format(new Date(), 'yyyy-MM-dd');
+      setSelectedDateRevisions(allData.filter(r => r.revision_date.split('T')[0] === todayStr));
     } catch (error) {
       console.error('Error fetching revisions:', error);
     } finally {
@@ -165,6 +184,69 @@ export default function HomeScreen() {
     }
   };
 
+  // Generate marked dates for calendar
+  const markedDates = useMemo(() => {
+    const marks: { [key: string]: any } = {};
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    
+    // Group revisions by date and count them
+    const dateCounts: { [key: string]: number } = {};
+    allRevisions.forEach(revision => {
+      // Extract just the date part (yyyy-MM-dd) from revision_date
+      const dateStr = revision.revision_date.split('T')[0];
+      dateCounts[dateStr] = (dateCounts[dateStr] || 0) + 1;
+    });
+
+    // Create markers for each date with revisions
+    Object.keys(dateCounts).forEach(dateStr => {
+      marks[dateStr] = {
+        marked: true,
+        dotColor: dateStr === todayStr ? '#4ade80' : '#3b82f6',
+        ...(dateStr === selectedDate && { selected: true, selectedColor: '#3b82f6' }),
+      };
+    });
+
+    // Always mark selected date
+    if (!marks[selectedDate]) {
+      marks[selectedDate] = {
+        selected: true,
+        selectedColor: '#3b82f6',
+      };
+    } else {
+      marks[selectedDate].selected = true;
+      marks[selectedDate].selectedColor = '#3b82f6';
+    }
+
+    // Mark today
+    if (!marks[todayStr]) {
+      marks[todayStr] = {
+        marked: false,
+      };
+    }
+    marks[todayStr].customStyles = {
+      container: {
+        borderWidth: 2,
+        borderColor: '#4ade80',
+      },
+    };
+
+    return marks;
+  }, [allRevisions, selectedDate]);
+
+  const onDayPress = (day: DateData) => {
+    setSelectedDate(day.dateString);
+    const revisionsForDate = allRevisions.filter(r => r.revision_date.split('T')[0] === day.dateString);
+    setSelectedDateRevisions(revisionsForDate);
+  };
+
+  const getSelectedDateLabel = () => {
+    const selected = parseISO(selectedDate);
+    if (isToday(selected)) {
+      return "Today's Revisions";
+    }
+    return `Revisions for ${format(selected, 'MMM dd, yyyy')}`;
+  };
+
   return (
     <View style={styles.container}>
       <ScrollView
@@ -174,30 +256,78 @@ export default function HomeScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#fff" />
         }
       >
-        {/* Today's Revisions Section */}
-        <View style={styles.section}>
+        {/* Monthly Calendar Section */}
+        <View style={styles.calendarSection}>
           <View style={styles.sectionHeader}>
-            <Ionicons name="today" size={24} color="#f59e0b" />
-            <Text style={styles.sectionTitle}>Today's Revisions</Text>
-            <View style={styles.countBadge}>
-              <Text style={styles.countText}>{todayRevisions.length}</Text>
+            <Ionicons name="calendar" size={24} color="#4ade80" />
+            <Text style={styles.sectionTitle}>Revision Calendar</Text>
+          </View>
+          <View style={styles.calendarContainer}>
+            <Calendar
+              current={selectedDate}
+              onDayPress={onDayPress}
+              markedDates={markedDates}
+              theme={{
+                backgroundColor: '#1a1a2e',
+                calendarBackground: '#1a1a2e',
+                textSectionTitleColor: '#888',
+                selectedDayBackgroundColor: '#3b82f6',
+                selectedDayTextColor: '#fff',
+                todayTextColor: '#4ade80',
+                dayTextColor: '#fff',
+                textDisabledColor: '#444',
+                dotColor: '#3b82f6',
+                selectedDotColor: '#fff',
+                arrowColor: '#4ade80',
+                monthTextColor: '#fff',
+                textDayFontWeight: '500',
+                textMonthFontWeight: 'bold',
+                textDayHeaderFontWeight: '500',
+                textDayFontSize: 14,
+                textMonthFontSize: 18,
+                textDayHeaderFontSize: 12,
+              }}
+              style={styles.calendar}
+              enableSwipeMonths={true}
+            />
+          </View>
+          {/* Calendar Legend */}
+          <View style={styles.legendContainer}>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: '#4ade80' }]} />
+              <Text style={styles.legendText}>Today</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: '#3b82f6' }]} />
+              <Text style={styles.legendText}>Has Revisions</Text>
             </View>
           </View>
-          {todayRevisions.length === 0 ? (
+        </View>
+
+        {/* Selected Date Revisions Section */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="bookmark" size={24} color="#f59e0b" />
+            <Text style={styles.sectionTitle}>{getSelectedDateLabel()}</Text>
+            <View style={styles.countBadge}>
+              <Text style={styles.countText}>{selectedDateRevisions.length}</Text>
+            </View>
+          </View>
+          {selectedDateRevisions.length === 0 ? (
             <View style={styles.emptyCard}>
               <Ionicons name="checkmark-done-circle" size={48} color="#4ade80" />
-              <Text style={styles.emptyText}>No revisions for today!</Text>
-              <Text style={styles.emptySubtext}>You're all caught up</Text>
+              <Text style={styles.emptyText}>No revisions for this date</Text>
+              <Text style={styles.emptySubtext}>Select a date with revisions</Text>
             </View>
           ) : (
-            todayRevisions.map((revision) => renderRevisionCard(revision, true))
+            selectedDateRevisions.map((revision) => renderRevisionCard(revision, isToday(parseISO(selectedDate))))
           )}
         </View>
 
         {/* Upcoming Revisions Section */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Ionicons name="calendar" size={24} color="#3b82f6" />
+            <Ionicons name="calendar-outline" size={24} color="#3b82f6" />
             <Text style={styles.sectionTitle}>Upcoming Revisions</Text>
             <View style={styles.countBadge}>
               <Text style={styles.countText}>{upcomingRevisions.length}</Text>
@@ -244,6 +374,38 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 16,
     paddingBottom: 100,
+  },
+  calendarSection: {
+    marginBottom: 24,
+  },
+  calendarContainer: {
+    backgroundColor: '#1a1a2e',
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginTop: 8,
+  },
+  calendar: {
+    borderRadius: 16,
+  },
+  legendContainer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 12,
+    gap: 24,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  legendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 6,
+  },
+  legendText: {
+    color: '#888',
+    fontSize: 12,
   },
   section: {
     marginBottom: 24,
